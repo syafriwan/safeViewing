@@ -1,0 +1,109 @@
+import cv2
+import threading
+import time
+import winsound
+from ultralytics import YOLO
+
+# 1. Muat model YOLOv8 (versi nano)
+model = YOLO("yolov8n.pt")
+
+# 2. Buka kamera eksternal USB
+cap = cv2.VideoCapture(1)
+
+# 2. Buka kamera default
+# cap = cv2.VideoCapture(0)
+
+# 3. Pengaturan Jarak Berbasis Koordinat Lantai Y (Dinamis)
+# Nilai awal diset ke 380, nanti bisa Anda geser naik-turun saat program jalan
+BATAS_LANTAI_AMAN_Y = 380  
+
+JEDA_ALARM_DETIK = 0.5        
+waktu_alarm_terakhir = 0         
+MIN_CONFIDENCE_SCORE = 0.60     
+
+def bunyikan_alarm():
+    winsound.Beep(2000, 500)
+
+print("=== KONTROL KEYBOARD ===")
+print("Tekan 'W' atau Panah Atas  : Geser garis KE ATAS (Jarak aman lebih jauh)")
+print("Tekan 'S' atau Panah Bawah : Geser garis KE BAWAH (Jarak aman lebih dekat)")
+print("Tekan 'Q'                  : Keluar dari program")
+print("========================")
+
+while cap.isOpened():
+    success, frame = cap.read()
+    if not success:
+        print("Gagal membaca kamera.")
+        break
+
+    tinggi_layar, lebar_layar, _ = frame.shape
+
+    # Jalankan deteksi objek khusus manusia
+    results = model(frame, classes=[0], verbose=False)
+
+    terlalu_dekat = False
+
+    for result in results:
+        for box in result.boxes:
+            if int(box.cls) != 0:
+                continue
+                
+            skor_konf = float(box.conf)
+            if skor_konf < MIN_CONFIDENCE_SCORE:
+                continue
+
+            # Ambil koordinat kotak pembatas
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            
+            # Posisi kaki terbawah anak
+            posisi_kaki_y = y2
+
+            # Jika kaki melewati garis batas (nilai Y kaki > nilai Y garis), anak terlalu dekat
+            if posisi_kaki_y > BATAS_LANTAI_AMAN_Y:
+                terlalu_dekat = True
+                warna = (0, 0, 255)  # Merah (Bahaya)
+            else:
+                warna = (0, 255, 0)  # Hijau (Aman)
+
+            # Gambar kotak deteksi manusia
+            cv2.rectangle(frame, (x1, y1), (x2, y2), warna, 2)
+            
+            # Tampilkan info di layar
+            info_teks = f"Anak: {skor_konf*100:.0f}% | Y Kaki: {posisi_kaki_y}"
+            cv2.putText(frame, info_teks, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, warna, 2)
+
+    # 4. GAMBAR GARIS BATAS AMAN DI LAYAR
+    warna_garis = (0, 0, 255) if terlalu_dekat else (0, 255, 0)
+    cv2.line(frame, (0, BATAS_LANTAI_AMAN_Y), (lebar_layar, BATAS_LANTAI_AMAN_Y), warna_garis, 2)
+    
+    # Tampilkan petunjuk tombol kontrol di pojok kiri bawah layar
+    cv2.putText(frame, f"BATAS AMAN Y: {BATAS_LANTAI_AMAN_Y} (Tekan W/S untuk Atur)", (10, tinggi_layar - 20), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    # 5. Logika Suara Alarm
+    waktu_sekarang = time.time()
+    if terlalu_dekat and (waktu_sekarang - waktu_alarm_terakhir > JEDA_ALARM_DETIK):
+        thread_suara = threading.Thread(target=bunyikan_alarm)
+        thread_suara.start()
+        waktu_alarm_terakhir = waktu_sekarang
+
+    # Tampilkan video
+    cv2.imshow("Monitor Jarak Aman Anak", frame)
+
+    # 6. LOGIKA PEMBACAAN TOMBOL KEYBOARD (REAKSI INSTAN)
+    key = cv2.waitKey(1) & 0xFF
+    
+    # Tekan 'w' atau Tombol Panah Atas (kode key di beberapa OS bisa berbeda, jadi kita pakai w/s sebagai alternatif aman)
+    if key == ord('w') or key == 82:  
+        BATAS_LANTAI_AMAN_Y = max(10, BATAS_LANTAI_AMAN_Y - 5)  # Geser ke atas (kurangi nilai Y)
+        
+    # Tekan 's' atau Tombol Panah Bawah
+    elif key == ord('s') or key == 84:  
+        BATAS_LANTAI_AMAN_Y = min(tinggi_layar - 10, BATAS_LANTAI_AMAN_Y + 5)  # Geser ke bawah (tambah nilai Y)
+        
+    # Tekan 'q' untuk keluar
+    elif key == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
